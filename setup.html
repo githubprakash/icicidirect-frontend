@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Rocket Dashboard - SD Bands Edition</title>
+    <style>
+        :root {
+            --bg-color: #0b0e14;
+            --card-bg: #1c2128;
+            --text-color: #adbac7;
+            --bullish: #34d058;
+            --bearish: #f85149;
+            --rocket-color: #ffcc00;
+            --warn-color: #ff7b72;
+            --accent: #539bf5;
+        }
+
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container { width: 100%; max-width: 1200px; }
+
+        .header {
+            text-align: center;
+            border-bottom: 2px solid #30363d;
+            padding-bottom: 15px;
+            margin-bottom: 25px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid #444c56;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+
+        h2 { color: var(--accent); font-size: 1.1rem; margin-top: 0; border-bottom: 1px solid #444c56; padding-bottom: 10px; }
+
+        .row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid #2d333b;
+        }
+
+        .btn-group button {
+            background: #2d333b;
+            color: #adbac7;
+            border: 1px solid #444c56;
+            padding: 8px 14px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+
+        button.active-up { background: var(--bullish) !important; color: #000; }
+        button.active-down { background: var(--bearish) !important; color: #fff; }
+        button.active-warn { background: var(--rocket-color) !important; color: #000; }
+
+        .big-move-row {
+            background: rgba(255, 204, 0, 0.05);
+            padding: 15px 10px;
+            border: 1px dashed var(--rocket-color);
+            border-radius: 8px;
+            margin-top: 15px;
+        }
+
+        .signal-panel {
+            grid-column: 1 / -1;
+            background: #22272e;
+            padding: 40px;
+            border-radius: 15px;
+            text-align: center;
+            margin-top: 30px;
+            border: 4px solid #444c56;
+            transition: 0.5s;
+        }
+
+        #status-title { font-size: 2.8rem; font-weight: 900; margin: 0; }
+        #status-desc { font-size: 1.2rem; margin-top: 15px; }
+
+        .rocket-anim { animation: shake 0.3s infinite; color: var(--rocket-color) !important; }
+        @keyframes shake {
+            0% { transform: translate(1px, 1px); }
+            50% { transform: translate(-2px, -1px); }
+            100% { transform: translate(1px, 1px); }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h1>🚀 INSTITUTIONAL ROCKET DASHBOARD</h1>
+        <p>VWAP + AVWAP + Standard Deviation Logic</p>
+    </div>
+
+    <div class="grid">
+        <!-- 1. FUTURE TREND -->
+        <div class="card">
+            <h2>1. FUTURE (Weekly/Monthly)</h2>
+            <div class="row">
+                <span>Monthly VWAP</span>
+                <div class="btn-group">
+                    <button onclick="update(this, 'fm', 'up')">Above</button>
+                    <button onclick="update(this, 'fm', 'down')">Below</button>
+                </div>
+            </div>
+            <div class="row">
+                <span>Weekly VWAP</span>
+                <div class="btn-group">
+                    <button onclick="update(this, 'fw', 'up')">Above</button>
+                    <button onclick="update(this, 'fw', 'down')">Below</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. PREMIUM MOMENTUM -->
+        <div class="card">
+            <h2>2. PREMIUM VWAPs</h2>
+            <div class="row">
+                <span>Session VWAP</span>
+                <div class="btn-group">
+                    <button onclick="update(this, 'ps', 'up')">Above</button>
+                    <button onclick="update(this, 'ps', 'down')">Below</button>
+                </div>
+            </div>
+            <div class="row">
+                <span>Wed AVWAP</span>
+                <div class="btn-group">
+                    <button onclick="update(this, 'pw', 'up')">Above</button>
+                    <button onclick="update(this, 'pw', 'down')">Below</button>
+                </div>
+            </div>
+            <div class="big-move-row">
+                <div class="row" style="border:none; padding:0;">
+                    <span style="color:var(--rocket-color)">🔥 BIG MOVE AVWAP</span>
+                    <div class="btn-group">
+                        <button onclick="update(this, 'pb', 'up')">BREAKOUT</button>
+                        <button onclick="update(this, 'pb', 'down')">REJECTED</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3. DEVIATION BANDS -->
+        <div class="card">
+            <h2>3. DEVIATION (Momentum Scale)</h2>
+            <div class="row">
+                <span>Current Band Position</span>
+                <div class="btn-group" style="display:grid; grid-template-columns: 1fr 1fr; gap:5px;">
+                    <button onclick="update(this, 'sd', 'vwap')">At VWAP</button>
+                    <button onclick="update(this, 'sd', 'sd1')">Above +1 SD</button>
+                    <button onclick="update(this, 'sd', 'sd2')">Above +2 SD</button>
+                    <button onclick="update(this, 'sd', 'below')">Below VWAP</button>
+                </div>
+            </div>
+            <p style="font-size: 0.8rem; color: #768390; margin-top: 10px;">
+                *Use Standard Deviation +1 and +2 in your Chart Settings.
+            </p>
+        </div>
+
+        <!-- MASTER SIGNAL -->
+        <div class="signal-panel" id="panel">
+            <div id="status-title">WAITING FOR DATA...</div>
+            <div id="status-desc">Enter Chart positions to see Institutional Signal.</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let state = { fm:null, fw:null, ps:null, pw:null, pb:null, sd:null };
+
+    function update(btn, key, val) {
+        btn.parentElement.querySelectorAll('button').forEach(b => b.className = '');
+        if(val === 'up' || val === 'sd1') btn.className = 'active-up';
+        else if(val === 'down' || val === 'below') btn.className = 'active-down';
+        else if(val === 'sd2') btn.className = 'active-warn';
+        else btn.className = 'active-up';
+        
+        state[key] = val;
+        analyze();
+    }
+
+    function analyze() {
+        const title = document.getElementById('status-title');
+        const desc = document.getElementById('status-desc');
+        const panel = document.getElementById('panel');
+        panel.className = "signal-panel";
+        panel.style.borderColor = "#444c56";
+
+        // MEGA ROCKET LOGIC (+1 SD Breakout)
+        if(state.pb === 'up' && state.sd === 'sd1') {
+            title.innerText = "🚀 MEGA ROCKET: GOD MODE";
+            title.classList.add('rocket-anim');
+            desc.innerText = "EXTREME MOMENTUM! Price broke Big Move AVWAP and is riding +1 SD. Hold for big target.";
+            panel.style.borderColor = "var(--rocket-color)";
+        }
+        // DANGER ZONE (+2 SD)
+        else if(state.sd === 'sd2') {
+            title.innerText = "🛑 CAUTION: OVEREXTENDED";
+            title.style.color = "var(--warn-color)";
+            desc.innerText = "Price is above +2 SD. High chance of pullback to VWAP. DO NOT CHASE! Book partial profits.";
+            panel.style.borderColor = "var(--warn-color)";
+        }
+        // NORMAL BREAKOUT
+        else if(state.pb === 'up' && state.fw !== null) {
+            title.innerText = "🔥 INSTITUTIONAL BREAKOUT";
+            title.style.color = "var(--bullish)";
+            desc.innerText = "Big Move AVWAP broken. Momentum is starting. Wait for +1 SD ride.";
+        }
+        // TRAP
+        else if(state.pb === 'down' || state.sd === 'below') {
+            title.innerText = "⚠️ NO BUY ZONE";
+            title.style.color = "#768390";
+            desc.innerText = "Price is below levels or rejected. Option sellers are in control.";
+        }
+        else {
+            title.innerText = "ANALYZING...";
+        }
+    }
+</script>
+
+</body>
+</html>

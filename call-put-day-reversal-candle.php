@@ -85,7 +85,7 @@ if ($selectedDate && $selectedStrike) {
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Options Pro - Click to Draw Ray</title>
+    <title>Options Pro - Final Fixed</title>
     <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
     <style>
         html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; background: #fff; font-family: 'Segoe UI', sans-serif; }
@@ -94,7 +94,7 @@ if ($selectedDate && $selectedStrike) {
         .btn { background: #2563eb; color: white; border: none; padding: 7px 12px; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 11px; }
         select { padding: 5px; border-radius: 4px; border: 1px solid #ccc; font-size: 11px; background: #f9fafb; }
         .btn-tool { background: #64748b; border: 2px solid transparent; }
-        .btn-tool.active { background: #f59e0b; border-color: #000; animation: pulse 1.5s infinite; }
+        .btn-tool.active { background: #f59e0b !important; border-color: #000; animation: pulse 1.5s infinite; }
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
     </style>
 </head>
@@ -124,11 +124,12 @@ if ($selectedDate && $selectedStrike) {
         <option value="m30">30 Min</option>
     </select>
 
-    <button id="ray_btn" class="btn btn-tool" onclick="toggleRayTool()">🪄 Click to Draw Ray</button>
+    <button id="ray_btn" class="btn btn-tool" onclick="toggleTool('ray')">🪄 Ray</button>
+    <a href="jurney.php" id="ray_btn" class="btn btn-tool" target="_blank">Journey</a>
     
     <div style="margin-left: auto; display:flex; gap:8px; align-items:center;">
-        <button class="btn" style="background:#ef4444;" onclick="clearRays()">🗑️ Rays</button>
-        <button class="btn" style="background:#ef4444;" onclick="clearFRVP()">🗑️ FRVP</button>
+        <button class="btn" style="background:#ef4444;" onclick="clearDrawings('rays')">🗑️ Rays</button>
+        <button class="btn" style="background:#ef4444;" onclick="clearDrawings('frvp')">🗑️ FRVP</button>
         <label style="font-size:11px; font-weight:bold;"><input type="checkbox" id="sr_switch" onchange="syncUI()"> S&R</label>
     </div>
 </div>
@@ -148,11 +149,28 @@ const srData = <?php echo json_encode($srAnnotations); ?>;
 
 let frvpLines = JSON.parse(localStorage.getItem('v15_frvp')) || [];
 let horizontalRays = JSON.parse(localStorage.getItem('v15_rays')) || [];
-let isRayToolActive = false;
+
+let currentTool = null; // 'ray'
 
 const xAnns = [];
-hourSeps.forEach(h => { xAnns.push({ x: h.x, borderColor: 'rgba(0,0,0,0.1)', strokeDashArray: 3 }); });
-daySeps.forEach(s => { xAnns.push({ x: s.x, borderColor: '#2563eb', borderWidth: 2, label: { text: s.label, style: { color: '#fff', background: '#2563eb' } } }); });
+// --- Hourly Separator: Dashed and Light ---
+hourSeps.forEach(h => { 
+    xAnns.push({ 
+        x: h.x, 
+        borderColor: 'rgba(0, 0, 0, 0.25)', 
+        borderWidth: 1,                 
+        strokeDashArray: 5                
+    }); 
+});
+
+daySeps.forEach(s => { 
+    xAnns.push({ 
+        x: s.x, 
+        borderColor: '#2563eb', 
+        borderWidth: 2, 
+        label: { text: s.label, style: { color: '#fff', background: '#2563eb' } } 
+    }); 
+});
 
 const options = {
     series: [
@@ -163,19 +181,18 @@ const options = {
         height: '100%', animations: { enabled: false },
         toolbar: { autoSelected: 'selection', tools: { selection: true, zoom: true, pan: false } },
         events: { 
-            selection: function(ctx, { xaxis }) { if (xaxis.min && xaxis.max) addFRVP(xaxis.min, xaxis.max); },
+            selection: function(ctx, { xaxis }) { 
+                if (xaxis.min && xaxis.max) addFRVP(xaxis.min, xaxis.max); 
+            },
             click: function(e, chartContext, config) {
-                if (isRayToolActive) {
-                    // Correct Y-coordinate to Price conversion logic
+                if (currentTool === 'ray') {
                     const yAxis = chartContext.w.globals.yAxisScale[0];
                     const gridHeight = chartContext.w.globals.gridHeight;
                     const topOffset = chartContext.w.globals.translateY;
                     const relativeY = e.offsetY - topOffset;
-                    
                     const priceRange = yAxis.niceMax - yAxis.niceMin;
                     const pricePerPixel = priceRange / gridHeight;
                     const clickedPrice = yAxis.niceMax - (relativeY * pricePerPixel);
-                    
                     addRay(parseFloat(clickedPrice.toFixed(2)));
                 }
             }
@@ -192,30 +209,27 @@ const options = {
 const chart = new ApexCharts(document.querySelector("#mainChart"), options);
 chart.render();
 
-function toggleRayTool() {
-    isRayToolActive = !isRayToolActive;
-    const btn = document.getElementById('ray_btn');
-    const chartDiv = document.getElementById('mainChart');
-    if(isRayToolActive) {
-        btn.classList.add('active');
-        btn.innerText = "🎯 Click on Chart Now";
-        chartDiv.style.cursor = 'crosshair';
-    } else {
-        btn.classList.remove('active');
-        btn.innerText = "🪄 Click to Draw Ray";
-        chartDiv.style.cursor = 'default';
-    }
+function toggleTool(tool) {
+    currentTool = (currentTool === tool) ? null : tool;
+    document.getElementById('ray_btn').classList.toggle('active', currentTool === 'ray');
+    document.getElementById('mainChart').style.cursor = currentTool ? 'crosshair' : 'default';
 }
 
 function addRay(price) {
     if(!price || price < 0) return;
     horizontalRays.push({ y: price });
     localStorage.setItem('v15_rays', JSON.stringify(horizontalRays));
+    currentTool = null;
+    toggleTool(null);
     syncUI();
-    toggleRayTool(); // Disable tool after one draw
 }
 
-function clearRays() { if(confirm("Delete all Rays?")) { horizontalRays = []; localStorage.removeItem('v15_rays'); syncUI(); } }
+function clearDrawings(type) {
+    if(!confirm("Delete all " + type + "?")) return;
+    if(type === 'rays') { horizontalRays = []; localStorage.removeItem('rays'); }
+    if(type === 'frvp') { frvpLines = []; localStorage.removeItem('v15_frvp'); }
+    syncUI();
+}
 
 function savePocSettings() {
     localStorage.setItem('v15_poc_type', document.getElementById('poc_type_select').value);
@@ -233,13 +247,10 @@ function syncUI() {
     else if(pocType === 'm30') activePocData = m30Poc;
 
     let yAnns = [];
-    
-    // 1. Draw Rays (Solid Blue Lines)
     horizontalRays.forEach(ray => {
         yAnns.push({ y: ray.y, borderColor: '#4f46e5', borderWidth: 2, label: { text: 'RAY ' + ray.y, style: { color: '#fff', background: '#4f46e5' } } });
     });
 
-    // 2. S&R
     if(showSR) {
         srData.forEach(l => {
             yAnns.push({ y: l.high, borderColor: '#ef4444', strokeDashArray: 4, label: { text: 'R: '+l.high, style: { color:'#fff', background:'#ef4444'} } });
@@ -247,13 +258,12 @@ function syncUI() {
         });
     }
 
-    // 3. FRVP
     frvpLines.forEach(line => {
         yAnns.push({ y: line.y, x: line.xStart, x2: line.xEnd, borderColor: '#f97316', borderWidth: 4, label: { text: 'POC: ' + line.label, style: { color: '#fff', background: '#f97316' } } });
     });
 
     chart.updateOptions({ 
-        annotations: { yaxis: yAnns },
+        annotations: { xaxis: xAnns, yaxis: yAnns },
         series: [
             { name: 'Price', type: 'candlestick', data: candleSeries.map((val, i) => ({ x: labels[i], y: val })) },
             { name: 'POC', type: 'line', data: activePocData.map((val, i) => ({ x: labels[i], y: val })) }
@@ -276,8 +286,6 @@ function addFRVP(minIdx, maxIdx) {
         syncUI();
     }
 }
-
-function clearFRVP() { if(confirm("Clear FRVPs?")) { frvpLines = []; localStorage.removeItem('v15_frvp'); syncUI(); } }
 
 window.onload = () => { syncUI(); };
 </script>

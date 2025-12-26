@@ -10,13 +10,29 @@ $datesList = [];
 $dateRes = $conn->query("SELECT MIN(DATE(datetime)) as start_date, strikePrice, expiryDate FROM $tableName GROUP BY strikePrice, expiryDate ORDER BY start_date DESC");
 while($r = $dateRes->fetch_assoc()) { $datesList[] = $r; }
 
-$selectedDate = $_GET['date'] ?? ($datesList[0]['start_date'] ?? '');
+$rawSelection = $_GET['selection'] ?? ''; 
+$selectedDate = ''; $selectedStrike = '';
+
+if ($rawSelection && strpos($rawSelection, '|') !== false) {
+    $parts = explode('|', $rawSelection);
+    $selectedDate = $parts[0];
+    $selectedStrike = $parts[1];
+} else {
+    $selectedDate = $datesList[0]['start_date'] ?? '';
+    $selectedStrike = $datesList[0]['strikePrice'] ?? '';
+}
+
+$selectedExpiry = '';
+foreach($datesList as $item) { 
+    if($item['start_date'] == $selectedDate && $item['strikePrice'] == $selectedStrike) { 
+        $selectedExpiry = $item['expiryDate']; 
+        break; 
+    } 
+}
+
 $intervalKey = $_GET['interval'] ?? '15m';
 $intervalMap = ['5m' => 300, '15m' => 900, '30m' => 1800, '1h' => 3600, '2h' => 7200, '4h' => 14400, '1d' => 86400];
 $seconds = $intervalMap[$intervalKey] ?? 900;
-
-$selectedStrike = ''; $selectedExpiry = '';
-foreach($datesList as $item) { if($item['start_date'] == $selectedDate) { $selectedStrike = $item['strikePrice']; $selectedExpiry = $item['expiryDate']; break; } }
 
 $labels = []; $candleData = []; $daySeps = []; $hourSeps = []; $srAnnotations = []; $rawVolumes = [];
 $dPocSeries = []; $hPocSeries = []; $m30PocSeries = [];
@@ -28,12 +44,15 @@ if ($selectedDate && $selectedStrike) {
             SUBSTRING_INDEX(GROUP_CONCAT(close ORDER BY datetime DESC), ',', 1) as c,
             SUM(volume) as total_v, DATE(datetime) as d_only
             FROM $tableName
-            WHERE strikePrice = '$selectedStrike' AND DATE(datetime) >= '$selectedDate' AND DATE(datetime) <= '$selectedExpiry'
+            WHERE strikePrice = '$selectedStrike' 
+              AND DATE(datetime) >= '$selectedDate' 
+              AND DATE(datetime) <= '$selectedExpiry'
               AND TIME(datetime) BETWEEN '09:15:00' AND '15:30:00'
             GROUP BY time_slot, d_only ORDER BY time_slot ASC";
+            
     $result = $conn->query($sql);
     
-    $prevDate = null; $lastHour = null; $last30m = null;
+    $prevDate = null; $lastHour = null;
     $dayProfile = []; $hourProfile = []; $m30Profile = [];
     $tHigh = 0; $tLow = 999999;
 
@@ -42,6 +61,7 @@ if ($selectedDate && $selectedStrike) {
         $currD = $row['d_only'];
         $timePart = date('H:i', $ts);
         $timeLabel = date('d M H:i', $ts);
+        
         $priceClose = (int)round((float)$row['c'], 0);
         $vol = (int)$row['total_v'];
 
@@ -62,12 +82,13 @@ if ($selectedDate && $selectedStrike) {
         $lastHour = $hourKey;
 
         $m30Key = date('Y-m-d H:', $ts) . (date('i', $ts) < 30 ? '00' : '30');
-        if($last30m && $last30m != $m30Key) $m30Profile = [];
         $m30Profile[$priceClose] = ($m30Profile[$priceClose] ?? 0) + $vol;
         $m30PocSeries[] = array_search(max($m30Profile), $m30Profile);
-        $last30m = $m30Key;
 
-        if ($timePart != '09:15' && strpos($timePart, ':15') !== false) $hourSeps[] = ['x' => $timeLabel];
+        // Hourly Separator Highlighted (Every Hour at :15)
+        if ($seconds < 3600 && $timePart != '09:15' && strpos($timePart, ':15') !== false) {
+            $hourSeps[] = ['x' => $timeLabel];
+        }
 
         $rowHigh = (float)$row['h']; $rowLow = (float)$row['l'];
         if($rowHigh > $tHigh) $tHigh = $rowHigh;
@@ -85,17 +106,16 @@ if ($selectedDate && $selectedStrike) {
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Options Pro - Final Fixed</title>
+    <title>Options Pro - Footer Fixed & Sep Highlighted</title>
     <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
     <style>
         html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; background: #fff; font-family: 'Segoe UI', sans-serif; }
         .header { height: 55px; background: white; display: flex; align-items: center; padding: 0 15px; gap: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); border-bottom: 1px solid #eee; }
-        .chart-card { height: calc(100vh - 75px); margin: 10px; background: white; border-radius: 8px; border: 1px solid #e0e0e0; }
+        .chart-card { height: calc(100vh - 85px); margin: 10px; background: white; border-radius: 8px; border: 1px solid #e0e0e0; }
         .btn { background: #2563eb; color: white; border: none; padding: 7px 12px; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 11px; }
         select { padding: 5px; border-radius: 4px; border: 1px solid #ccc; font-size: 11px; background: #f9fafb; }
-        .btn-tool { background: #64748b; border: 2px solid transparent; }
-        .btn-tool.active { background: #f59e0b !important; border-color: #000; animation: pulse 1.5s infinite; }
-        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
+        .btn-tool { background: #64748b; color:white; padding:7px 12px; border-radius:4px; font-size:11px; cursor:pointer; text-decoration:none; border:none;}
+        .btn-tool.active { background: #f59e0b !important; }
     </style>
 </head>
 <body>
@@ -106,27 +126,30 @@ if ($selectedDate && $selectedStrike) {
             <option value="buy" <?php echo $mode=='buy'?'selected':''; ?>>BUY MODE</option>
             <option value="sell" <?php echo $mode=='sell'?'selected':''; ?>>SELL MODE</option>
         </select>
-        <select name="date">
-            <?php foreach($datesList as $d) echo "<option value='{$d['start_date']}' ".($d['start_date']==$selectedDate?'selected':'').">".date('d M (D)', strtotime($d['start_date']))." - {$d['strikePrice']}</option>"; ?>
+        <select name="selection">
+            <?php 
+            foreach($datesList as $d) {
+                $val = $d['start_date'] . "|" . $d['strikePrice'];
+                $is_selected = ($selectedDate == $d['start_date'] && $selectedStrike == $d['strikePrice']) ? 'selected' : '';
+                echo "<option value='$val' $is_selected>" . date('d M (D)', strtotime($d['start_date'])) . " - {$d['strikePrice']}</option>";
+            }
+            ?>
         </select>
-        <select name="interval">
+        <select name="interval" onchange="this.form.submit()">
             <?php foreach($intervalMap as $k => $v) echo "<option value='$k' ".($intervalKey==$k?'selected':'').">$k</option>"; ?>
         </select>
         <button type="submit" class="btn">Update</button>
     </form>
 
-    <div style="height: 20px; width: 1px; background: #ddd;"></div>
-
+    <div style="height: 20px; width: 1px; background: #ddd; margin: 0 5px;"></div>
     <select id="poc_type_select" onchange="savePocSettings()">
         <option value="none">POC: None</option>
         <option value="developing">Developing</option>
         <option value="hourly">1 Hour</option>
         <option value="m30">30 Min</option>
     </select>
-
     <button id="ray_btn" class="btn btn-tool" onclick="toggleTool('ray')">🪄 Ray</button>
-    <a href="jurney.php" id="ray_btn" class="btn btn-tool" target="_blank">Journey</a>
-    
+    <a href="jurney.php" class="btn btn-tool" target="_blank">Journey</a>
     <div style="margin-left: auto; display:flex; gap:8px; align-items:center;">
         <button class="btn" style="background:#ef4444;" onclick="clearDrawings('rays')">🗑️ Rays</button>
         <button class="btn" style="background:#ef4444;" onclick="clearDrawings('frvp')">🗑️ FRVP</button>
@@ -149,20 +172,20 @@ const srData = <?php echo json_encode($srAnnotations); ?>;
 
 let frvpLines = JSON.parse(localStorage.getItem('v15_frvp')) || [];
 let horizontalRays = JSON.parse(localStorage.getItem('v15_rays')) || [];
-
-let currentTool = null; // 'ray'
+let currentTool = null; 
 
 const xAnns = [];
-// --- Hourly Separator: Dashed and Light ---
+// --- Hourly Separator: Highlighted ---
 hourSeps.forEach(h => { 
     xAnns.push({ 
         x: h.x, 
-        borderColor: 'rgba(0, 0, 0, 0.25)', 
-        borderWidth: 1,                 
-        strokeDashArray: 5                
+        borderColor: 'rgba(0, 0, 0, 0.4)', // Darker for visibility
+        borderWidth: 1.5, 
+        strokeDashArray: 4 
     }); 
 });
 
+// --- Day Separator: Solid Blue ---
 daySeps.forEach(s => { 
     xAnns.push({ 
         x: s.x, 
@@ -181,9 +204,7 @@ const options = {
         height: '100%', animations: { enabled: false },
         toolbar: { autoSelected: 'selection', tools: { selection: true, zoom: true, pan: false } },
         events: { 
-            selection: function(ctx, { xaxis }) { 
-                if (xaxis.min && xaxis.max) addFRVP(xaxis.min, xaxis.max); 
-            },
+            selection: function(ctx, { xaxis }) { if (xaxis.min && xaxis.max) addFRVP(xaxis.min, xaxis.max); },
             click: function(e, chartContext, config) {
                 if (currentTool === 'ray') {
                     const yAxis = chartContext.w.globals.yAxisScale[0];
@@ -198,12 +219,30 @@ const options = {
             }
         }
     },
-    stroke: { width: [1, 2], curve: 'stepline' },
+    stroke: { show: true, width: [1.5, 2] },
     colors: ['#000', '#3b82f6'],
-    xaxis: { type: 'category', labels: { style: { fontSize: '10px' } }, tickAmount: 15 },
-    yaxis: { opposite: true },
-    annotations: { xaxis: xAnns, yaxis: [] },
-    plotOptions: { candlestick: { colors: { upward: '#10b981', downward: '#ef4444' } } }
+    xaxis: { 
+        type: 'category', 
+        labels: { 
+            show: true,
+            rotate: -45,
+            style: { fontSize: '10px', fontWeight: 600, colors: '#444' } 
+        },
+        tickAmount: 20 // Forces more labels to appear
+    },
+    yaxis: { opposite: true, labels: { style: { fontSize: '10px' } } },
+    annotations: { 
+        position: 'back', // Important for Wick visibility
+        xaxis: xAnns, 
+        yaxis: [] 
+    },
+    plotOptions: { 
+        candlestick: { 
+            colors: { upward: '#10b981', downward: '#ef4444' },
+            wick: { useFillColor: true } 
+        } 
+    },
+    grid: { borderColor: '#f1f1f1' }
 };
 
 const chart = new ApexCharts(document.querySelector("#mainChart"), options);
@@ -226,7 +265,7 @@ function addRay(price) {
 
 function clearDrawings(type) {
     if(!confirm("Delete all " + type + "?")) return;
-    if(type === 'rays') { horizontalRays = []; localStorage.removeItem('rays'); }
+    if(type === 'rays') { horizontalRays = []; localStorage.removeItem('v15_rays'); }
     if(type === 'frvp') { frvpLines = []; localStorage.removeItem('v15_frvp'); }
     syncUI();
 }
@@ -253,13 +292,13 @@ function syncUI() {
 
     if(showSR) {
         srData.forEach(l => {
-            yAnns.push({ y: l.high, borderColor: '#ef4444', strokeDashArray: 4, label: { text: 'R: '+l.high, style: { color:'#fff', background:'#ef4444'} } });
-            yAnns.push({ y: l.low, borderColor: '#10b981', strokeDashArray: 4, label: { text: 'S: '+l.low, style: { color:'#fff', background:'#10b981'} } });
+            yAnns.push({ y: l.high, borderColor: 'rgba(239, 68, 68, 0.5)', strokeDashArray: 4, label: { text: 'R: '+l.high, style: { color:'#fff', background:'#ef4444'} } });
+            yAnns.push({ y: l.low, borderColor: 'rgba(16, 185, 129, 0.5)', strokeDashArray: 4, label: { text: 'S: '+l.low, style: { color:'#fff', background:'#10b981'} } });
         });
     }
 
     frvpLines.forEach(line => {
-        yAnns.push({ y: line.y, x: line.xStart, x2: line.xEnd, borderColor: '#f97316', borderWidth: 4, label: { text: 'POC: ' + line.label, style: { color: '#fff', background: '#f97316' } } });
+        yAnns.push({ y: line.y, x: line.xStart, x2: line.xEnd, borderColor: '#f97316', borderWidth: 3, label: { text: 'POC: ' + line.label, style: { color: '#fff', background: '#f97316' } } });
     });
 
     chart.updateOptions({ 

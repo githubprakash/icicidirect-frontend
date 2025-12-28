@@ -2,125 +2,122 @@
 // 1. Database Connection
 $conn = new mysqli("localhost", "root", "root", "options_m_db_by_fut");
 
-// 2. Fetch Journey Start Dates (Dropdown)
-$datesList = [];
-$dateQuery = "SELECT MIN(DATE(datetime)) as start_date, strikePrice, expiryDate 
-              FROM option_prices_5m_call 
-              GROUP BY strikePrice, expiryDate 
-              ORDER BY start_date DESC";
-$dateRes = $conn->query($dateQuery);
-while($r = $dateRes->fetch_assoc()) {
-    $datesList[] = ['date' => $r['start_date'], 'strike' => $r['strikePrice'], 'expiry' => $r['expiryDate']];
-}
+// --- AJAX DATA HANDLER ---
+if (isset($_GET['ajax'])) {
+    $date = $_GET['date'];
+    $strike = $_GET['strike'];
+    $expiry = $_GET['expiry'];
+    $interval = $_GET['interval'] ?? '15m';
+    $intervalMap = ['5m'=>300, '15m'=>900, '30m'=>1800, '60m'=>3600];
+    $sec = $intervalMap[$interval] ?? 900;
 
-$selectedDate = $_GET['date'] ?? ($datesList[0]['date'] ?? '');
-$selectedStrike = ''; $selectedExpiry = '';
-
-foreach($datesList as $item) {
-    if($item['date'] == $selectedDate) {
-        $selectedStrike = $item['strike'];
-        $selectedExpiry = $item['expiry'];
-        break;
-    }
-}
-
-$intervalMap = ['5m'=>300, '15m'=>900, '30m'=>1800, '60m'=>3600];
-$selectedInterval = $_GET['interval'] ?? '15m';
-$seconds = $intervalMap[$selectedInterval] ?? 900;
-
-// 3. Fetch Data & Calculate Levels
-$labels = []; $combData = []; $cPriceData = []; $pPriceData = []; $nDeltaData = []; $cDeltaData = [];
-$dayHighlights = []; $dailyLevels = [];
-$startPrice = 0; $totalHigh = 0; $totalLow = 999999;
-
-if ($selectedDate && $selectedStrike) {
     $sql = "SELECT 
-                FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(C.datetime)/$seconds)*$seconds) as time_slot, 
+                FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(C.datetime)/$sec)*$sec) as time_slot, 
                 AVG(C.close) as cp, AVG(P.close) as pp, AVG(C.delta) as cd, AVG(P.delta) as pd
             FROM option_prices_5m_call C 
             JOIN option_prices_5m_put P ON C.datetime = P.datetime AND C.strikePrice = P.strikePrice AND C.expiryDate = P.expiryDate
-            WHERE C.strikePrice = '$selectedStrike' AND C.expiryDate = '$selectedExpiry'
-              AND DATE(C.datetime) >= '$selectedDate' AND DATE(C.datetime) <= '$selectedExpiry'
+            WHERE C.strikePrice = '$strike' AND C.expiryDate = '$expiry'
+              AND DATE(C.datetime) >= '$date' AND DATE(C.datetime) <= '$expiry'
             GROUP BY time_slot ORDER BY time_slot ASC";
 
-    $result = $conn->query($sql);
-    $idx = 0; $prevDate = null;
-    $tempHigh = 0; $tempLow = 999999; $dayStartIdx = 0;
+    $res = $conn->query($sql);
+    $output = [
+        'labels'=>[], 'comb'=>[], 'cp'=>[], 'pp'=>[], 'nd'=>[], 'cd'=>[], 
+        'dayHighlights'=>[], 'dailyLevels'=>[], 'startPrice'=>0, 'totalLow'=>999999, 'totalHigh'=>0
+    ];
 
-    while($row = $result->fetch_assoc()) {
-        $currFullDate = date('Y-m-d', strtotime($row['time_slot']));
+    $idx = 0; $prevDate = null; $tempHigh = 0; $tempLow = 999999; $dayStartIdx = 0;
+    while($row = $res->fetch_assoc()) {
+        $currD = date('Y-m-d', strtotime($row['time_slot']));
         $price = round($row['cp'] + $row['pp'], 2);
 
-        if ($prevDate && $currFullDate != $prevDate) {
-            $dailyLevels[] = ['start' => $dayStartIdx, 'end' => $idx - 1, 'high' => $tempHigh, 'low' => $tempLow];
-            $dayHighlights[] = ['index' => $idx, 'label' => date('d M', strtotime($row['time_slot']))];
+        if ($prevDate && $currD != $prevDate) {
+            $output['dailyLevels'][] = ['start' => $dayStartIdx, 'end' => $idx - 1, 'high' => $tempHigh, 'low' => $tempLow];
+            $output['dayHighlights'][] = ['index' => $idx, 'label' => date('d M', strtotime($row['time_slot']))];
             $tempHigh = 0; $tempLow = 999999; $dayStartIdx = $idx;
         }
 
-        if($idx == 0) $startPrice = $price;
+        if($idx == 0) $output['startPrice'] = $price;
         if($price > $tempHigh) $tempHigh = $price;
         if($price < $tempLow) $tempLow = $price;
-        if($price > $totalHigh) $totalHigh = $price;
-        if($price < $totalLow) $totalLow = $price;
+        if($price > $output['totalHigh']) $output['totalHigh'] = $price;
+        if($price < $output['totalLow']) $output['totalLow'] = $price;
 
-        $labels[] = date('d M H:i', strtotime($row['time_slot']));
-        $combData[] = $price;
-        $cPriceData[] = round($row['cp'], 2);
-        $pPriceData[] = round($row['pp'], 2);
-        $cDeltaData[] = round($row['cd'], 3);
-        $nDeltaData[] = round($row['cd'] + $row['pd'], 3);
-        
-        $prevDate = $currFullDate;
-        $idx++;
+        $output['labels'][] = date('d M H:i', strtotime($row['time_slot']));
+        $output['comb'][] = $price;
+        $output['cp'][] = round($row['cp'], 2);
+        $output['pp'][] = round($row['pp'], 2);
+        $output['cd'][] = round($row['cd'], 3);
+        $output['nd'][] = round($row['cd'] + $row['pd'], 3);
+        $prevDate = $currD; $idx++;
     }
-    $dailyLevels[] = ['start' => $dayStartIdx, 'end' => $idx - 1, 'high' => $tempHigh, 'low' => $tempLow];
+    $output['dailyLevels'][] = ['start' => $dayStartIdx, 'end' => $idx - 1, 'high' => $tempHigh, 'low' => $tempLow];
+    echo json_encode($output);
+    exit;
 }
+
+// 2. Fetch Journey Unique Combinations for Initial Load
+$datesList = [];
+$dateQuery = "SELECT MIN(DATE(datetime)) as start_date, strikePrice, expiryDate FROM option_prices_5m_call GROUP BY strikePrice, expiryDate ORDER BY start_date DESC, strikePrice ASC";
+$dateRes = $conn->query($dateQuery);
+while($r = $dateRes->fetch_assoc()) { $datesList[] = ['date' => $r['start_date'], 'strike' => $r['strikePrice'], 'expiry' => $r['expiryDate']]; }
+
+$selectedDate = $_GET['date'] ?? ($datesList[0]['date'] ?? '');
+$selectedStrike = $_GET['strike'] ?? ($datesList[0]['strike'] ?? '');
+$selectedExpiry = $_GET['expiry'] ?? ($datesList[0]['expiry'] ?? '');
+$selectedInterval = $_GET['interval'] ?? '15m';
 ?>
 
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Strike Journey Tracker</title>
+    <title>Strike Journey Tracker (AJAX)</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@2.2.1"></script>
     <style>
         body { font-family: sans-serif; background: #f4f6f9; padding: 20px; }
         .nav-bar { background: white; padding: 15px; border-radius: 8px; display: flex; gap: 20px; align-items: flex-end; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 15px; }
-        .chart-card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); height: 75vh; }
+        .chart-card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); height: 75vh; position: relative; }
         .settings-bar { background: #fff; padding: 10px 20px; border-radius: 8px; margin-bottom: 10px; display: flex; gap: 20px; font-size: 13px; font-weight: bold; align-items: center; border: 1px solid #ddd; }
         .info-badge { padding: 5px 12px; background: #e9ecef; border-radius: 4px; font-size: 13px; color: #495057; }
-        .btn-update { background: #007bff; color: white; border: none; padding: 9px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; }
-        .sr-toggle { margin-left: auto; background: #fff1f2; color: #e11d48; padding: 4px 10px; border-radius: 4px; border: 1px solid #fda4af; }
-        select { padding: 8px; border-radius: 4px; border: 1px solid #ccc; }
-        label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+        .sr-toggle { margin-left: auto; background: #fff1f2; color: #e11d48; padding: 4px 10px; border-radius: 4px; border: 1px solid #fda4af; display: flex; gap: 10px;}
+        select { padding: 8px; border-radius: 4px; border: 1px solid #ccc; max-width: 300px; }
+        #loader { display:none; position: absolute; top: 10px; right: 20px; background: orange; color: white; padding: 2px 10px; border-radius: 4px; font-size: 11px; }
     </style>
 </head>
 <body>
 
 <div class="nav-bar">
-    <form method="GET" style="display:flex; gap:15px; align-items:flex-end;">
-        <div style="display:flex; flex-direction:column; gap:4px;">
-            <label style="font-size:11px; color:#666;">START DATE</label>
-            <select name="date">
-                <?php foreach($datesList as $d): ?>
-                    <option value="<?php echo $d['date']; ?>" <?php echo ($d['date'] == $selectedDate) ? 'selected' : ''; ?>>
-                        <?php echo date('d M Y', strtotime($d['date'])); ?> (<?php echo $d['strike']; ?>)
-                    </option>
-                <?php endforeach; ?>
-            </select>
-        </div>
-        <div style="display:flex; flex-direction:column; gap:4px;">
-            <label style="font-size:11px; color:#666;">INTERVAL</label>
-            <select name="interval">
-                <?php foreach($intervalMap as $k => $v) echo "<option value='$k' ".($selectedInterval==$k?'selected':'').">$k</option>"; ?>
-            </select>
-        </div>
-        <button type="submit" class="btn-update">Update</button>
-    </form>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+        <label style="font-size:11px; color:#666;">SELECT STRIKE & DATE</label>
+        <select id="main_selector">
+            <?php foreach($datesList as $d): 
+                $val = "{$d['date']}|{$d['strike']}|{$d['expiry']}";
+                $is_selected = ($d['date'] == $selectedDate && $d['strike'] == $selectedStrike && $d['expiry'] == $selectedExpiry) ? 'selected' : '';
+            ?>
+                <option value="<?php echo $val; ?>" <?php echo $is_selected; ?>>
+                    <?php echo date('d M Y', strtotime($d['date'])); ?> - <?php echo $d['strike']; ?>
+                </option>
+            <?php endforeach; ?>
+        </select>
+    </div>
 
-    <div style="margin-left:auto; display:flex; gap:10px;">
-        <div class="info-badge">Strike: <b><?php echo $selectedStrike; ?></b></div>
-        <div class="info-badge">Expiry: <b><?php echo $selectedExpiry; ?></b></div>
+    <div style="display:flex; flex-direction:column; gap:4px;">
+        <label style="font-size:11px; color:#666;">INTERVAL</label>
+        <select id="interval_selector">
+            <option value="5m" <?php echo $selectedInterval=='5m'?'selected':''; ?>>5m</option>
+            <option value="15m" <?php echo $selectedInterval=='15m'?'selected':''; ?>>15m</option>
+            <option value="30m" <?php echo $selectedInterval=='30m'?'selected':''; ?>>30m</option>
+            <option value="60m" <?php echo $selectedInterval=='60m'?'selected':''; ?>>60m</option>
+        </select>
+    </div>
+
+    <div style="margin-left:auto; display:flex; gap:10px; align-items: center;">
+        <label style="font-size:11px; color: #555; background: #f0f0f0; padding: 5px; border-radius: 4px; border: 1px solid #ddd; cursor:pointer;">
+            <input type="checkbox" id="key_reload_switch"> Auto-Load Keys
+        </label>
+        <div class="info-badge">Strike: <b id="badge_strike"><?php echo $selectedStrike; ?></b></div>
+        <div class="info-badge">Expiry: <b id="badge_expiry"><?php echo $selectedExpiry; ?></b></div>
     </div>
 </div>
 
@@ -131,95 +128,114 @@ if ($selectedDate && $selectedStrike) {
     <label style="color:red;"><input type="checkbox" data-index="2" checked> Put P</label>
     <label style="color:purple;"><input type="checkbox" data-index="3" checked> Net Δ</label>
     <label style="color:orange;"><input type="checkbox" data-index="4" checked> Call Δ</label>
-    
-    <div class="sr-toggle">
-        <label><input type="checkbox" id="sr_switch"> Day S&R</label>
-    </div>
+    <div class="sr-toggle"><label><input type="checkbox" id="sr_switch"> Day S&R</label></div>
 </div>
 
 <div class="chart-card">
+    <div id="loader">Loading Data...</div>
     <canvas id="journeyChart"></canvas>
 </div>
 
 <script>
-const ctx = document.getElementById('journeyChart').getContext('2d');
-const dayHighlights = <?php echo json_encode($dayHighlights); ?>;
-const dailyLevels = <?php echo json_encode($dailyLevels); ?>;
-const startPrice = <?php echo (float)$startPrice; ?>;
-const totalLow = <?php echo (float)$totalLow; ?>;
-const totalHigh = <?php echo (float)$totalHigh; ?>;
+let mainChart;
+let globalData = {};
+const STORAGE_KEY = 'options_journey_ajax_v1';
 
-function getAnns(showSR) {
-    let anns = {};
-    // Vertical Day Separators
-    dayHighlights.forEach((h, i) => {
-        anns['line'+i] = {
-            type: 'line', xMin: h.index-0.5, xMax: h.index-0.5,
-            borderColor: '#999', borderWidth: 1, borderDash: [5,5],
-            label: { display: true, content: h.label, position: 'start', font: {size: 10}, backgroundColor: '#f4f6f9' }
-        };
-    });
-    // Horizontal S&R
-    if(showSR) {
-        dailyLevels.forEach((dl, i) => {
-            anns['res'+i] = {
-                type: 'line', yMin: dl.high, yMax: dl.high, xMin: dl.start, xMax: dl.end,
-                borderColor: 'rgba(255,0,0,0.5)', borderWidth: 2, borderDash: [2,2],
-                label: { display: true, content: 'R:'+dl.high, position: 'end', font: {size:9} }
-            };
-            anns['sup'+i] = {
-                type: 'line', yMin: dl.low, yMax: dl.low, xMin: dl.start, xMax: dl.end,
-                borderColor: 'rgba(0,128,0,0.5)', borderWidth: 2, borderDash: [2,2],
-                label: { display: true, content: 'S:'+dl.low, position: 'end', font: {size:9} }
-            };
-        });
-    }
-    return anns;
+async function refreshData() {
+    const selector = document.getElementById('main_selector');
+    const interval = document.getElementById('interval_selector').value;
+    const parts = selector.value.split('|');
+    const loader = document.getElementById('loader');
+
+    loader.style.display = 'block';
+
+    // Update URL without reloading
+    const url = new URL(window.location.href);
+    url.searchParams.set('date', parts[0]);
+    url.searchParams.set('strike', parts[1]);
+    url.searchParams.set('expiry', parts[2]);
+    url.searchParams.set('interval', interval);
+    window.history.pushState({}, '', url);
+
+    // Fetch new data via AJAX
+    const response = await fetch(`${url.origin}${url.pathname}?ajax=1&date=${parts[0]}&strike=${parts[1]}&expiry=${parts[2]}&interval=${interval}`);
+    const data = await response.json();
+    globalData = data;
+
+    // Update Header Badges
+    document.getElementById('badge_strike').innerText = parts[1];
+    document.getElementById('badge_expiry').innerText = parts[2];
+
+    // Update Chart Data
+    mainChart.data.labels = data.labels;
+    mainChart.data.datasets[0].data = data.comb;
+    mainChart.data.datasets[1].data = data.cp;
+    mainChart.data.datasets[2].data = data.pp;
+    mainChart.data.datasets[3].data = data.nd;
+    mainChart.data.datasets[4].data = data.cd;
+
+    // Update Percentage Axis Scale
+    mainChart.options.scales.yPct.min = ((data.totalLow - data.startPrice)/data.startPrice)*100 - 2;
+    mainChart.options.scales.yPct.max = ((data.totalHigh - data.startPrice)/data.startPrice)*100 + 2;
+
+    updateAnnotations();
+    loader.style.display = 'none';
 }
 
-const mainChart = new Chart(ctx, {
+function updateAnnotations() {
+    const showSR = document.getElementById('sr_switch').checked;
+    let anns = {};
+    globalData.dayHighlights.forEach((h, i) => {
+        anns['line'+i] = { type: 'line', xMin: h.index-0.5, xMax: h.index-0.5, borderColor: '#999', borderWidth: 1, borderDash: [5,5], label: { display: true, content: h.label, position: 'start', font: {size: 10}, backgroundColor: '#f4f6f9' } };
+    });
+    if(showSR) {
+        globalData.dailyLevels.forEach((dl, i) => {
+            anns['res'+i] = { type: 'line', yMin: dl.high, yMax: dl.high, xMin: dl.start, xMax: dl.end, borderColor: 'rgba(255,0,0,0.5)', borderWidth: 2, borderDash: [2,2], label: { display: true, content: 'R:'+dl.high, position: 'end', font: {size:9} } };
+            anns['sup'+i] = { type: 'line', yMin: dl.low, yMax: dl.low, xMin: dl.start, xMax: dl.end, borderColor: 'rgba(0,128,0,0.5)', borderWidth: 2, borderDash: [2,2], label: { display: true, content: 'S:'+dl.low, position: 'end', font: {size:9} } };
+        });
+    }
+    mainChart.options.plugins.annotation.annotations = anns;
+    mainChart.update();
+}
+
+// Initial Chart Setup
+const ctx = document.getElementById('journeyChart').getContext('2d');
+mainChart = new Chart(ctx, {
     type: 'line',
-    data: {
-        labels: <?php echo json_encode($labels); ?>,
-        datasets: [
-            { label: 'Combined', data: <?php echo json_encode($combData); ?>, borderColor: '#007bff', yAxisID: 'yPrice', borderWidth: 2, pointRadius: 0 },
-            { label: 'Call P', data: <?php echo json_encode($cPriceData); ?>, borderColor: 'green', yAxisID: 'yPrice', borderWidth: 1, pointRadius: 0 },
-            { label: 'Put P', data: <?php echo json_encode($pPriceData); ?>, borderColor: 'red', yAxisID: 'yPrice', borderWidth: 1, pointRadius: 0 },
-            { label: 'Net Delta', data: <?php echo json_encode($nDeltaData); ?>, borderColor: 'purple', yAxisID: 'yDelta', borderDash: [5,3], pointRadius: 0 },
-            { label: 'Call Delta', data: <?php echo json_encode($cDeltaData); ?>, borderColor: 'orange', yAxisID: 'yDelta', borderDash: [2,2], pointRadius: 0 }
-        ]
-    },
+    data: { labels: [], datasets: [
+        { label: 'Combined', data: [], borderColor: '#007bff', yAxisID: 'yPrice', borderWidth: 2, pointRadius: 0 },
+        { label: 'Call P', data: [], borderColor: 'green', yAxisID: 'yPrice', borderWidth: 1, pointRadius: 0 },
+        { label: 'Put P', data: [], borderColor: 'red', yAxisID: 'yPrice', borderWidth: 1, pointRadius: 0 },
+        { label: 'Net Delta', data: [], borderColor: 'purple', yAxisID: 'yDelta', borderDash: [5,3], pointRadius: 0 },
+        { label: 'Call Delta', data: [], borderColor: 'orange', yAxisID: 'yDelta', borderDash: [2,2], pointRadius: 0 }
+    ]},
     options: {
-        responsive: true, maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
+        responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
         scales: {
             yPrice: { type: 'linear', position: 'right', title: { display: true, text: 'Price' } },
             yDelta: { type: 'linear', position: 'left', title: { display: true, text: 'Delta' }, grid: { drawOnChartArea: false } },
-            yPct: {
-                type: 'linear', position: 'right', grid: { drawOnChartArea: false },
-                min: ((totalLow - startPrice)/startPrice)*100 - 2,
-                max: ((totalHigh - startPrice)/startPrice)*100 + 2,
-                callback: v => v.toFixed(1) + '%',
-                title: { display: true, text: '%' }
-            }
+            yPct: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, callback: v => v.toFixed(1) + '%', title: { display: true, text: '%' } }
         },
-        plugins: {
-            legend: { display: false },
-            annotation: { annotations: getAnns(false) }
-        }
+        plugins: { legend: { display: false }, annotation: { annotations: {} } }
     }
 });
 
-// Settings persistence
-const STORAGE_KEY = 'options_journey_v6';
+// Event Listeners
+document.getElementById('main_selector').addEventListener('change', refreshData);
+document.getElementById('interval_selector').addEventListener('change', refreshData);
+document.getElementById('main_selector').addEventListener('keyup', (e) => {
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && document.getElementById('key_reload_switch').checked) {
+        refreshData();
+    }
+});
 
 function save() {
-    const cfg = { vis: {}, sr: document.getElementById('sr_switch').checked };
+    const cfg = { vis: {}, sr: document.getElementById('sr_switch').checked, keyReload: document.getElementById('key_reload_switch').checked };
     document.querySelectorAll('#chartToggles input[data-index]').forEach(cb => cfg.vis[cb.dataset.index] = cb.checked);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
 }
 
-function load() {
+function loadSettings() {
     const data = localStorage.getItem(STORAGE_KEY);
     if(data) {
         const cfg = JSON.parse(data);
@@ -228,22 +244,21 @@ function load() {
             if(cb) { cb.checked = cfg.vis[idx]; mainChart.setDatasetVisibility(idx, cb.checked); }
         });
         document.getElementById('sr_switch').checked = cfg.sr;
-        mainChart.options.plugins.annotation.annotations = getAnns(cfg.sr);
-        mainChart.update();
+        document.getElementById('key_reload_switch').checked = cfg.keyReload;
     }
+    refreshData(); // Initial Data Load
 }
 
-document.querySelectorAll('#chartToggles input').forEach(cb => {
+document.querySelectorAll('#chartToggles input, #key_reload_switch').forEach(cb => {
     cb.addEventListener('change', () => {
-        if(cb.id === 'sr_switch') mainChart.options.plugins.annotation.annotations = getAnns(cb.checked);
-        else mainChart.setDatasetVisibility(cb.dataset.index, cb.checked);
+        if(cb.id === 'sr_switch') updateAnnotations();
+        else if(cb.dataset.index !== undefined) mainChart.setDatasetVisibility(cb.dataset.index, cb.checked);
         mainChart.update();
         save();
     });
 });
 
-window.onload = load;
+window.onload = loadSettings;
 </script>
-
 </body>
 </html>

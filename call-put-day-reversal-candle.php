@@ -58,6 +58,9 @@ $seconds = $intervalMap[$intervalKey] ?? 900;
 $labels = []; $candleData = []; $daySeps = []; $hourSeps = []; $rawVolumes = [];
 $dPocSeries = []; $hPocSeries = []; $m30PocSeries = [];
 
+// Developing Arrays
+$devPocArr = []; $devVahArr = []; $devValArr = [];
+
 // Profile logic
 $dailyFixedPocs = [];
 $fixedProfiles = [];
@@ -81,6 +84,7 @@ if ($selectedDate && $selectedStrike) {
     
     $prevDate = null; $lastHour = null;
     $dayProfile = []; $hourProfile = []; $m30Profile = [];
+    $cumulativeDayProfile = []; // For Developing POC/VA
 
     while($row = $result->fetch_assoc()) {
         $ts = strtotime($row['time_slot']);
@@ -102,15 +106,43 @@ if ($selectedDate && $selectedStrike) {
         if ($prevDate && $currD != $prevDate) {
             $daySeps[] = ['x' => $timeLabel, 'label' => date('d M (D)', $ts)];
             $dayProfile = []; $hourProfile = []; $m30Profile = [];
+            $cumulativeDayProfile = []; // Reset developing profile every day
         }
 
+        // Developing Profile Calculation
+        $cumulativeDayProfile[$priceClose] = ($cumulativeDayProfile[$priceClose] ?? 0) + $vol;
+        
+        // Find dPOC
+        $currentDPoc = array_search(max($cumulativeDayProfile), $cumulativeDayProfile);
+        $devPocArr[] = $currentDPoc;
+
+        // Find dVA (70% Volume Area)
+        $totalVol = array_sum($cumulativeDayProfile);
+        $targetVA = $totalVol * 0.70;
+        $sortedPrices = array_keys($cumulativeDayProfile);
+        sort($sortedPrices);
+        
+        $pocIdx = array_search($currentDPoc, $sortedPrices);
+        $vaLowIdx = $pocIdx; $vaHighIdx = $pocIdx;
+        $currentVAVol = $cumulativeDayProfile[$currentDPoc];
+
+        while ($currentVAVol < $targetVA && ($vaLowIdx > 0 || $vaHighIdx < count($sortedPrices) - 1)) {
+            $prevVol = ($vaLowIdx > 0) ? $cumulativeDayProfile[$sortedPrices[$vaLowIdx-1]] : 0;
+            $nextVol = ($vaHighIdx < count($sortedPrices) - 1) ? $cumulativeDayProfile[$sortedPrices[$vaHighIdx+1]] : 0;
+            
+            if ($prevVol >= $nextVol && $vaLowIdx > 0) {
+                $vaLowIdx--; $currentVAVol += $prevVol;
+            } elseif ($vaHighIdx < count($sortedPrices) - 1) {
+                $vaHighIdx++; $currentVAVol += $nextVol;
+            } else { break; }
+        }
+        $devVahArr[] = $sortedPrices[$vaHighIdx];
+        $devValArr[] = $sortedPrices[$vaLowIdx];
+
         // Window Profiles
-        if ($timePart >= '09:15' && $timePart < '09:45') {
-            $fixedProfiles[$currD]['945'][$priceClose] = ($fixedProfiles[$currD]['945'][$priceClose] ?? 0) + $vol;
-        }
-        if ($timePart >= '09:15' && $timePart < '10:15') {
-            $fixedProfiles[$currD]['1015'][$priceClose] = ($fixedProfiles[$currD]['1015'][$priceClose] ?? 0) + $vol;
-        }
+        if ($timePart >= '09:15' && $timePart < '09:45') { $fixedProfiles[$currD]['945'][$priceClose] = ($fixedProfiles[$currD]['945'][$priceClose] ?? 0) + $vol; }
+        if ($timePart >= '09:15' && $timePart < '10:15') { $fixedProfiles[$currD]['1015'][$priceClose] = ($fixedProfiles[$currD]['1015'][$priceClose] ?? 0) + $vol; }
+        if ($timePart >= '09:15' && $timePart < '11:15') { $fixedProfiles[$currD]['1115'][$priceClose] = ($fixedProfiles[$currD]['1115'][$priceClose] ?? 0) + $vol; }
 
         $dayProfile[$priceClose] = ($dayProfile[$priceClose] ?? 0) + $vol;
         $dPocSeries[] = array_search(max($dayProfile), $dayProfile);
@@ -125,9 +157,7 @@ if ($selectedDate && $selectedStrike) {
         $m30Profile[$priceClose] = ($m30Profile[$priceClose] ?? 0) + $vol;
         $m30PocSeries[] = array_search(max($m30Profile), $m30Profile);
 
-        if ($seconds < 3600 && $timePart != '09:15' && strpos($timePart, ':15') !== false) {
-            $hourSeps[] = ['x' => $timeLabel];
-        }
+        if ($seconds < 3600 && $timePart != '09:15' && strpos($timePart, ':15') !== false) { $hourSeps[] = ['x' => $timeLabel]; }
 
         $labels[] = $timeLabel;
         $candleData[] = [round($o,2), round($h,2), round($l,2), round($c,2)];
@@ -139,7 +169,8 @@ if ($selectedDate && $selectedStrike) {
     foreach($fixedProfiles as $d => $profs) {
         $dailyFixedPocs[$d] = [
             'p945' => !empty($profs['945']) ? array_search(max($profs['945']), $profs['945']) : null,
-            'p1015' => !empty($profs['1015']) ? array_search(max($profs['1015']), $profs['1015']) : null
+            'p1015' => !empty($profs['1015']) ? array_search(max($profs['1015']), $profs['1015']) : null,
+            'p1115' => !empty($profs['1115']) ? array_search(max($profs['1115']), $profs['1115']) : null
         ];
     }
 }
@@ -149,7 +180,7 @@ if ($selectedDate && $selectedStrike) {
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Synthetic Spot - Persistent Settings</title>
+    <title>Synthetic Spot - Developing POC & VA</title>
     <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
     <style>
         html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; background: #fff; font-family: 'Segoe UI', sans-serif; }
@@ -210,6 +241,10 @@ if ($selectedDate && $selectedStrike) {
     <label class="switch-label"><input type="checkbox" id="pricey_switch"> Pricey</label>
     <label class="switch-label"><input type="checkbox" id="fixed_poc_switch" onchange="saveFixedSettings()"> Fixed</label>
 
+    <div style="height: 20px; width: 1px; background: #ddd; margin: 0 5px;"></div>
+    <label class="switch-label"><input type="checkbox" id="dev_poc_switch" onchange="syncUI()"> d-POC</label>
+    <label class="switch-label"><input type="checkbox" id="dev_va_switch" onchange="syncUI()"> d-VA</label>
+
     <div style="margin-left: auto; display:flex; gap:8px; align-items:center;">
         <button class="btn" style="background:#ef4444;" onclick="clearDrawings('rays')">🗑️ Rays</button>
         <button class="btn" style="background:#ef4444;" onclick="clearDrawings('frvp')">🗑️ FRVP</button>
@@ -222,8 +257,10 @@ if ($selectedDate && $selectedStrike) {
     <div class="modal-content">
         <span class="close" onclick="closeModal()">&times;</span>
         <h2>Help Guide</h2>
-        <p>1. <b>Fixed Switch:</b> Saves state automatically. Shows 30m/1h POC for current day.</p>
-        <p>2. <b>FRVP:</b> Now includes Day Name in labels.</p>
+        <p>1. <b>d-POC:</b> Shows how the POC moves candle-by-candle each day.</p>
+        <p>2. <b>d-VA:</b> Developing Value Area (VAH/VAL) based on 70% volume.</p>
+        <p>3. <b>FRVP Selection:</b> Starts from selected point to the right end.</p>
+        <p>4. <b>Colors:</b> 30m=Cyan, 1h=Orange, 2h=Pink, 1d=Red.</p>
     </div>
 </div>
 
@@ -233,6 +270,12 @@ const candleSeries = <?php echo json_encode($candleData); ?>;
 const dPoc = <?php echo json_encode($dPocSeries); ?>;
 const hPoc = <?php echo json_encode($hPocSeries); ?>;
 const m30Poc = <?php echo json_encode($m30PocSeries); ?>;
+
+// New Developing Series
+const devPocSeries = <?php echo json_encode($devPocArr); ?>;
+const devVahSeries = <?php echo json_encode($devVahArr); ?>;
+const devValSeries = <?php echo json_encode($devValArr); ?>;
+
 const volumes = <?php echo json_encode($rawVolumes); ?>;
 const daySeps = <?php echo json_encode($daySeps); ?>;
 const hourSeps = <?php echo json_encode($hourSeps); ?>;
@@ -251,7 +294,10 @@ daySeps.forEach(s => { xAnns.push({ x: s.x, borderColor: '#2563eb', borderWidth:
 const options = {
     series: [
         { name: 'Price', type: 'candlestick', data: candleSeries.map((val, i) => ({ x: labels[i], y: val })) },
-        { name: 'POC', type: 'line', data: [] }
+        { name: 'POC', type: 'line', data: [] },
+        { name: 'dPOC', type: 'line', data: [] },
+        { name: 'dVAH', type: 'line', data: [] },
+        { name: 'dVAL', type: 'line', data: [] }
     ],
     chart: { 
         height: '100%', animations: { enabled: false },
@@ -271,7 +317,8 @@ const options = {
             }
         }
     },
-    stroke: { show: true, width: [1.5, 2] },
+    stroke: { show: true, width: [1.5, 2, 2.5, 1.5, 1.5], dashArray: [0, 0, 0, 4, 4] },
+    colors: ['#26a69a', '#2962FF', '#ef4444', '#94a3b8', '#94a3b8'], // Candle, POC, dPOC, dVAH, dVAL
     xaxis: { type: 'category', labels: { show: true, rotate: -45, style: { fontSize: '10px' } }, tickAmount: 15 },
     yaxis: { opposite: true, labels: { style: { fontSize: '10px' } } },
     annotations: { position: 'back', xaxis: xAnns, yaxis: [], points: [] },
@@ -289,56 +336,61 @@ function getDayName(label) {
 }
 
 function syncUI() {
-    // Persistent POC Type
     const pocType = localStorage.getItem('v18_poc_type') || 'none';
     document.getElementById('poc_type_select').value = pocType;
 
-    // Persistent Fixed POC State
     const savedFixed = localStorage.getItem('v18_show_fixed');
     const showFixed = (savedFixed === null) ? true : (savedFixed === 'true');
     document.getElementById('fixed_poc_switch').checked = showFixed;
     
+    // Dev Visibility
+    const showDevPoc = document.getElementById('dev_poc_switch').checked;
+    const showDevVA = document.getElementById('dev_va_switch').checked;
+
     let activePocData = (pocType === 'developing') ? dPoc : (pocType === 'hourly' ? hPoc : (pocType === 'm30' ? m30Poc : []));
     let yAnns = [];
 
-    // 1. Fixed POC (Current Day Only)
     if(showFixed && fixedPocs[latestDate]) {
         const p = fixedPocs[latestDate];
-        if(p.p945) yAnns.push({ y: p.p945, borderColor: 'rgba(0,0,0,0.25)', borderWidth: 2, label: { text: '30m POC', style: { color: '#fff', background: 'rgba(0,0,0,0.3)' }}});
-        if(p.p1015) yAnns.push({ y: p.p1015, borderColor: 'rgba(0,0,0,0.45)', borderWidth: 2, strokeDashArray: 4, label: { text: '1h POC', style: { color: '#fff', background: 'rgba(0,0,0,0.5)' }}});
+        if(p.p945) yAnns.push({ y: p.p945, borderColor: '#00d2ff', borderWidth: 2, label: { text: '30m POC', style: { color: '#fff', background: '#00d2ff' }}});
+        if(p.p1015) yAnns.push({ y: p.p1015, borderColor: '#ff9800', borderWidth: 2, strokeDashArray: 4, label: { text: '1h POC', style: { color: '#fff', background: '#ff9800' }}});
+        if(p.p1115) yAnns.push({ y: p.p1115, borderColor: '#e91e63', borderWidth: 2, label: { text: '2h POC', style: { color: '#fff', background: '#e91e63' }}});
     }
 
-    // 2. Rays
     horizontalRays.forEach(ray => { yAnns.push({ y: ray.y, borderColor: '#4f46e5', borderWidth: 2, label: { text: ray.y, style: { color: '#fff', background: '#4f46e5' } } }); });
 
-    // 3. FRVP with Day Name
     frvpLines.forEach(line => { 
+        let timeframeColor = '#64748b';
+        if(line.drawnInterval === '30m') timeframeColor = '#06b6d4';
+        else if(line.drawnInterval === '1h') timeframeColor = '#f97316';
+        else if(line.drawnInterval === '2h') timeframeColor = '#d946ef';
+        else if(line.drawnInterval === '1d') timeframeColor = '#ef4444';
+
         yAnns.push({ 
-            y: line.y, x: line.xStart, x2: line.xEnd, borderColor: '#f97316', borderWidth: 3,
-            label: { text: `FRVP ${line.day || ''} (${line.y})`, position: 'right', style: { color: '#fff', background: '#f59e0b', fontSize: '10px' } }
+            y: line.y, x: line.xStart, x2: labels[labels.length - 1], borderColor: timeframeColor, borderWidth: 3,
+            label: { text: `FRVP ${line.day || ''} (${line.y})`, position: 'right', style: { color: '#fff', background: timeframeColor, fontSize: '10px' } }
         }); 
     });
 
     chart.updateOptions({ 
         annotations: { position: 'back', xaxis: xAnns, yaxis: yAnns },
         series: [
-            { name: 'Price', type: 'candlestick', data: candleSeries.map((val, i) => ({ x: labels[i], y: val })) },
-            { name: 'POC', type: 'line', data: activePocData.map((val, i) => ({ x: labels[i], y: val })) }
+            { name: 'Price', data: candleSeries.map((val, i) => ({ x: labels[i], y: val })) },
+            { name: 'POC', data: activePocData.map((val, i) => ({ x: labels[i], y: val })) },
+            { name: 'dPOC', data: showDevPoc ? devPocSeries.map((val, i) => ({ x: labels[i], y: val })) : [] },
+            { name: 'dVAH', data: showDevVA ? devVahSeries.map((val, i) => ({ x: labels[i], y: val })) : [] },
+            { name: 'dVAL', data: showDevVA ? devValSeries.map((val, i) => ({ x: labels[i], y: val })) : [] }
         ]
     });
 }
 
-function saveFixedSettings() {
-    localStorage.setItem('v18_show_fixed', document.getElementById('fixed_poc_switch').checked);
-    syncUI();
-}
-
-function savePocSettings() {
-    localStorage.setItem('v18_poc_type', document.getElementById('poc_type_select').value);
-    syncUI();
-}
+function saveFixedSettings() { localStorage.setItem('v18_show_fixed', document.getElementById('fixed_poc_switch').checked); syncUI(); }
+function savePocSettings() { localStorage.setItem('v18_poc_type', document.getElementById('poc_type_select').value); syncUI(); }
 
 function addFRVP(minIdx, maxIdx) {
+    let startIdx = Math.floor(minIdx);
+    if (startIdx < 0) startIdx = 0;
+    if (startIdx >= labels.length) startIdx = labels.length - 1;
     let start = Math.max(0, Math.round(minIdx) - 1);
     let end = Math.min(candleSeries.length - 1, Math.round(maxIdx) - 1);
     let profile = {};
@@ -349,8 +401,7 @@ function addFRVP(minIdx, maxIdx) {
     if (Object.keys(profile).length > 0) {
         let poc = Object.keys(profile).reduce((a, b) => profile[a] > profile[b] ? a : b);
         frvpLines.push({ 
-            y: parseInt(poc), xStart: labels[start], xEnd: labels[end],
-            day: getDayName(labels[start]) 
+            y: parseInt(poc), xStart: labels[startIdx], day: getDayName(labels[startIdx]), drawnInterval: currentInterval 
         });
         localStorage.setItem('v18_frvp', JSON.stringify(frvpLines));
         syncUI();

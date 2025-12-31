@@ -1,6 +1,6 @@
 <?php
 // 1. Database Connection
-$conn = new mysqli("localhost", "root", "root", "options_m_db_by_fut");
+$conn = new mysqli("34.180.49.73", "dev-user", ";blAFxC>*BVu:4g3", "options_m_db_by_fut");
 
 // --- AJAX DATA HANDLER ---
 if (isset($_GET['ajax'])) {

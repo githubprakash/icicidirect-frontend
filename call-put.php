@@ -37,7 +37,7 @@ $intervalMap = ['5m'=>300,'15m'=>900,'30m'=>1800,'60m'=>3600,'75m'=>4500,'90m'=>
 $seconds = $intervalMap[$intervalKey] ?? 900;
 
 $candleData = []; $rawVolumes = []; $callCloses = []; $putCloses = []; 
-$devPocArr = []; $devVahArr = []; $devValArr = []; $dayBreaks = [];
+$devPocArr = []; $devVahArr = []; $devValArr = []; $vwapArr = []; $dayBreaks = [];
 
 if ($selectedDate && $selectedStrike && $selectedExpiry) {
     $sql = "SELECT 
@@ -59,21 +59,26 @@ if ($selectedDate && $selectedStrike && $selectedExpiry) {
 
     $result = $conn->query($sql);
     $cumulativeDayProfile = []; $prevDate = null;
+    $sumPV = 0; $sumV = 0;
 
     while($row = $result->fetch_assoc()) {
         $currD = $row['d_only'];
-        
-        // --- 100% TIME FIX: Adding 5:30 hours offset to force 09:15 start ---
-        $ts = strtotime($row['time_slot']) + 19800; 
-        
+        $ts = strtotime($row['time_slot']) + 19800; // Force IST Offset
         $o = (float)$row['o']; $h = (float)$row['h']; $l = (float)$row['l']; $c = (float)$row['c'];
         $vol = (int)$row['total_v'];
 
         if ($prevDate != $currD) { 
             $cumulativeDayProfile = []; 
             $dayBreaks[] = $ts; 
+            $sumPV = 0; $sumV = 0; 
         }
         
+        // VWAP
+        $sumPV += $c * $vol;
+        $sumV += $vol;
+        $vwapValue = ($sumV > 0) ? ($sumPV / $sumV) : $c;
+
+        // POC
         $pCl = (int)round($c, 0);
         $cumulativeDayProfile[$pCl] = ($cumulativeDayProfile[$pCl] ?? 0) + $vol;
         $currentDPoc = array_search(max($cumulativeDayProfile), $cumulativeDayProfile);
@@ -97,6 +102,7 @@ if ($selectedDate && $selectedStrike && $selectedExpiry) {
         $devPocArr[] = ['time' => $ts, 'value' => (float)$currentDPoc];
         $devVahArr[] = ['time' => $ts, 'value' => (float)($sortedPrices[$vaHighIdx] ?? $pCl)];
         $devValArr[] = ['time' => $ts, 'value' => (float)($sortedPrices[$vaLowIdx] ?? $pCl)];
+        $vwapArr[] = ['time' => $ts, 'value' => (float)$vwapValue];
         $prevDate = $currD;
     }
 }
@@ -106,7 +112,9 @@ if ($selectedDate && $selectedStrike && $selectedExpiry) {
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Dynamic Option Chart</title>
+    <title>Dynamic Balanced Chart</title>
+    <!-- AUTO REFRESH EVERY 5 MINUTES (300 Seconds) -->
+    <meta http-equiv="refresh" content="300">
     <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
     <style>
         html, body { height: 100%; margin: 0; padding: 0; background: #fff; font-family: sans-serif; overflow: hidden; }
@@ -116,42 +124,41 @@ if ($selectedDate && $selectedStrike && $selectedExpiry) {
         select, input { padding: 5px; font-size: 11px; border: 1px solid #ccc; border-radius: 4px; }
         #tooltip { position: absolute; display: none; padding: 10px; font-size: 12px; z-index: 1000; top: 10px; left: 10px; pointer-events: none; border: 1px solid #ccc; background: rgba(255, 255, 255, 0.98); border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); line-height: 1.4; }
         .btn-tool.active { background: #f59e0b !important; color: #000; }
-        .hint { font-size: 10px; color: #ef4444; font-weight: bold; }
     </style>
 </head>
 <body>
 
 <div class="header">
-    <form method="GET" id="mainForm" style="display:flex; gap:8px; align-items:center;">
+    <form method="GET" style="display:flex; gap:8px; align-items:center;">
         <select name="history_range" onchange="this.form.submit()">
             <option value="1" <?= $historyRange=='1'?'selected':'' ?>>1M</option>
             <option value="2" <?= $historyRange=='2'?'selected':'' ?>>2M</option>
             <option value="3" <?= $historyRange=='3'?'selected':'' ?>>3M</option>
             <option value="all" <?= $historyRange=='all'?'selected':'' ?>>All</option>
         </select>
-        <div style="font-size:10px;"> C: <input type="number" name="call_qty" value="<?= $callQty ?>" style="width:35px;"> P: <input type="number" name="put_qty" value="<?= $putQty ?>" style="width:35px;"> </div>
+        <div style="font-size:10px;"> C: <input type="number" name="call_qty" value="<?= $callQty ?>" style="width:32px;"> P: <input type="number" name="put_qty" value="<?= $putQty ?>" style="width:32px;"> </div>
         
-        <select name="selection" style="width: 230px;" onchange="this.form.submit()">
+        <select name="selection" style="width: 220px;" onchange="this.form.submit()">
             <?php foreach($datesList as $d) {
                 $val = $d['start_date'] . "|" . $d['strikePrice'] . "|" . $d['expiryDate'];
                 $sel = ($selectedDate == $d['start_date'] && $selectedStrike == $d['strikePrice'] && $selectedExpiry == $d['expiryDate']) ? 'selected' : '';
-                echo "<option value='$val' $sel>".date('d M', strtotime($d['start_date']))." | Str: ".$d['strikePrice']." | Exp: ".date('d M', strtotime($d['expiryDate']))."</option>";
+                echo "<option value='$val' $sel>".date('d M', strtotime($d['start_date']))." | ".$d['strikePrice']." | ".date('d M', strtotime($d['expiryDate']))."</option>";
             } ?>
         </select>
 
         <select name="interval" onchange="this.form.submit()">
             <?php foreach($intervalMap as $k => $v) echo "<option value='$k' ".($intervalKey==$k?'selected':'').">$k</option>"; ?>
         </select>
-        
         <button type="submit" class="btn">Update</button>
     </form>
-    <div style="height: 20px; width: 1px; background: #ddd; margin: 0 5px;"></div>
+    <div style="height: 20px; width: 1px; background: #ddd; margin: 0 2px;"></div>
     <button id="ray_btn" class="btn" onclick="toggleTool('ray')">🪄 Ray</button>
     <button id="frvp_btn" class="btn" onclick="toggleTool('frvp')">🎯 FRVP</button>
-    <span id="tool_hint" class="hint"></span>
+    <label style="font-size:11px; color:#ff9800; font-weight:bold;"><input type="checkbox" id="vwap_switch" onchange="saveSwitchState()"> VWAP</label>
     <label style="font-size:11px;"><input type="checkbox" id="poc_switch" onchange="saveSwitchState()"> d-POC</label>
     <label style="font-size:11px;"><input type="checkbox" id="va_switch" onchange="saveSwitchState()"> d-VA</label>
-    <button class="btn" style="background:#ef4444;" onclick="clearToolsInstant()">🗑️ Tools</button>
+    <button class="btn" style="background:#ef4444;" onclick="clearToolsInstant()">🗑️</button>
+    <span id="tool_hint" style="font-size:10px; color:red;"></span>
 </div>
 
 <div id="chart-container">
@@ -164,33 +171,34 @@ const chart = LightweightCharts.createChart(container, {
     layout: { background: { color: '#ffffff' }, textColor: '#333' },
     grid: { vertLines: { color: '#f2f2f2' }, horzLines: { color: '#f2f2f2' } },
     timeScale: { timeVisible: true, secondsVisible: false, borderVisible: false, fixLeftEdge: true },
-    rightPriceScale: { borderVisible: false },
-    localization: { locale: 'en-US' } // Force non-local time
+    rightPriceScale: { borderVisible: false }
 });
 
 const mainSeries = chart.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', wickUpColor: '#26a69a', wickDownColor: '#ef5350' });
 const volumeSeries = chart.addHistogramSeries({ color: '#26a69a', priceFormat: { type: 'volume' }, priceScaleId: '' });
 volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
 
+const vwapSeries = chart.addLineSeries({ color: '#ff9800', lineWidth: 1.5, lineStyle: 2, visible: false });
 const pocSeries = chart.addLineSeries({ color: '#2962FF', lineWidth: 2, visible: false });
-const vahSeries = chart.addLineSeries({ color: '#94a3b8', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, visible: false });
-const valSeries = chart.addLineSeries({ color: '#94a3b8', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, visible: false });
+const vahSeries = chart.addLineSeries({ color: '#94a3b8', lineWidth: 1, lineStyle: 2, visible: false });
+const valSeries = chart.addLineSeries({ color: '#94a3b8', lineWidth: 1, lineStyle: 2, visible: false });
 
-// Session Break (Dotted Line)
-const breakSeries = chart.addHistogramSeries({ color: 'rgba(0, 0, 0, 0.15)', priceFormat: { type: 'volume' }, priceScaleId: 'overlay' });
+const breakSeries = chart.addHistogramSeries({ color: 'rgba(0, 0, 0, 0.12)', priceFormat: { type: 'volume' }, priceScaleId: 'overlay' });
 breakSeries.priceScale().applyOptions({ scaleMargins: { top: 0, bottom: 0 } });
 
 const candleData = <?= json_encode($candleData) ?>;
 const volumeData = <?= json_encode($rawVolumes) ?>;
-const callC = <?= json_encode($putCloses) ?>;
+const callC = <?= json_encode($callCloses) ?>;
 const putC = <?= json_encode($putCloses) ?>;
 const dPoc = <?= json_encode($devPocArr) ?>;
 const dVah = <?= json_encode($devVahArr) ?>;
 const dVal = <?= json_encode($devValArr) ?>;
+const vwapData = <?= json_encode($vwapArr) ?>;
 const dayBreaks = <?= json_encode($dayBreaks) ?>;
 
 mainSeries.setData(candleData);
 volumeSeries.setData(volumeData);
+vwapSeries.setData(vwapData);
 pocSeries.setData(dPoc);
 vahSeries.setData(dVah);
 valSeries.setData(dVal);
@@ -211,12 +219,14 @@ chart.subscribeCrosshairMove(param => {
 });
 
 function saveSwitchState() {
+    localStorage.setItem('tv_vwap_on', document.getElementById('vwap_switch').checked);
     localStorage.setItem('tv_poc_on', document.getElementById('poc_switch').checked);
     localStorage.setItem('tv_va_on', document.getElementById('va_switch').checked);
     updateLines();
 }
 
 function updateLines() {
+    vwapSeries.applyOptions({ visible: document.getElementById('vwap_switch').checked });
     pocSeries.applyOptions({ visible: document.getElementById('poc_switch').checked });
     const vaOn = document.getElementById('va_switch').checked;
     vahSeries.applyOptions({ visible: vaOn });
@@ -232,14 +242,12 @@ function toggleTool(tool) {
     currentTool = (currentTool === tool) ? null : tool;
     document.getElementById('ray_btn').className = (currentTool === 'ray' ? 'btn btn-tool active' : 'btn');
     document.getElementById('frvp_btn').className = (currentTool === 'frvp' ? 'btn btn-tool active' : 'btn');
-    document.getElementById('tool_hint').innerText = (currentTool === 'frvp') ? "Click Start Bar" : "";
     container.style.cursor = currentTool ? 'crosshair' : 'default';
 }
 
 chart.subscribeClick(param => {
     if (!param.time || !currentTool) return;
     const price = mainSeries.coordinateToPrice(param.point.y);
-
     if (currentTool === 'ray') {
         const p = parseFloat(price.toFixed(2));
         horizontalRays.push(p);
@@ -250,7 +258,6 @@ chart.subscribeClick(param => {
     else if (currentTool === 'frvp') {
         if (!frvpStart) {
             frvpStart = param.time;
-            document.getElementById('tool_hint').innerText = "Click End Bar";
             mainSeries.setMarkers([{ time: frvpStart, position: 'aboveBar', color: '#f59e0b', shape: 'arrowDown', text: 'START' }]);
         } else {
             const start = Math.min(frvpStart, param.time);
@@ -281,12 +288,12 @@ function clearToolsInstant() {
     frvpLineRefs.forEach(ref => mainSeries.removePriceLine(ref));
     rayLineRefs = []; frvpLineRefs = []; horizontalRays = []; frvpLines = [];
     localStorage.removeItem('tv_rays'); localStorage.removeItem('tv_frvp');
-    document.getElementById('tool_hint').innerText = "";
 }
 
 window.onload = () => {
     horizontalRays.forEach(p => rayLineRefs.push(mainSeries.createPriceLine({ price: p, color: '#4f46e5', lineWidth: 2, title: 'RAY' })));
     frvpLines.forEach(p => frvpLineRefs.push(mainSeries.createPriceLine({ price: parseFloat(p), color: '#64748b', lineWidth: 3, lineStyle: 2, title: 'FRVP POC' })));
+    document.getElementById('vwap_switch').checked = localStorage.getItem('tv_vwap_on') === 'true';
     document.getElementById('poc_switch').checked = localStorage.getItem('tv_poc_on') === 'true';
     document.getElementById('va_switch').checked = localStorage.getItem('tv_va_on') === 'true';
     updateLines();
